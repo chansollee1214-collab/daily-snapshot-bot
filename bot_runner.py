@@ -49,7 +49,7 @@ async def generate_reports(compact=False):
 
         formatted = f"""
 ━━━━━━━━━━━━━━━━━━
-*{label}*
+<b>{label}</b>
 ━━━━━━━━━━━━━━━━━━
 
 {summary}
@@ -93,7 +93,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         formatted = f"""
 ━━━━━━━━━━━━━━━━━━
-*{label}*
+<b>{label}</b>
 ━━━━━━━━━━━━━━━━━━
 
 {summary}
@@ -101,7 +101,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             formatted[:4000],
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
 
     await status_msg.edit_text("✅ 모든 채널 분석 완료")
@@ -129,14 +129,14 @@ async def daily_loop(application):
         await application.bot.send_message(
             chat_id=CHAT_ID,
             text="🗞️ *Morning Snapshot*\n최근 24시간 채널 요약입니다.",
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
 
         for report_text in reports:
             await application.bot.send_message(
                 chat_id=CHAT_ID,
                 text=report_text[:4000],
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
 
         await application.bot.send_message(
