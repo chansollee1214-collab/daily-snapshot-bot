@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 from datetime import datetime, timedelta, time as dtime
 from collections import defaultdict
@@ -21,6 +22,22 @@ API_ID = int(os.getenv("TG_API_ID"))
 API_HASH = os.getenv("TG_API_HASH")
 SESSION_NAME = os.getenv("TG_SESSION")
 CHAT_ID = os.getenv("BOT_CHAT_ID")
+
+
+# -------------------------------------------------
+# HTML 정리 함수 (Telegram 안전 처리)
+# -------------------------------------------------
+def sanitize_html(text: str) -> str:
+    if not text:
+        return text
+
+    # 허용되지 않는 태그 제거
+    text = re.sub(r"</?(div|span|p)[^>]*>", "", text, flags=re.IGNORECASE)
+
+    # 연속 줄바꿈 정리
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 
 
 # -------------------------------------------------
@@ -55,7 +72,8 @@ async def generate_reports(compact=False):
 {summary}
 """
 
-        results.append(formatted.strip())
+        cleaned = sanitize_html(formatted)
+        results.append(cleaned)
 
     return results
 
@@ -66,7 +84,6 @@ async def generate_reports(compact=False):
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await update.message.reply_text("🔄 리포트 준비 중...")
 
-    reports = []
     user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await user_client.start()
 
@@ -78,8 +95,10 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         grouped[item["source"]].append(item["text"])
 
     total_channels = len(grouped)
+
     await status_msg.edit_text(
-        f"📊 총 {total_channels}개 채널 분석 시작...\n예상 소요: 약 {total_channels * 8}~{total_channels * 12}초"
+        f"📊 총 {total_channels}개 채널 분석 시작\n"
+        f"예상 소요: 약 {total_channels * 8}~{total_channels * 12}초"
     )
 
     for idx, (source, messages) in enumerate(grouped.items(), start=1):
@@ -88,7 +107,6 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         summary = summarize_source(source, messages)
-
         label = CHANNEL_LABELS.get(source, f"📡 {source}")
 
         formatted = f"""
@@ -99,12 +117,15 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {summary}
 """
 
+        cleaned = sanitize_html(formatted)
+
         await update.message.reply_text(
-            formatted[:4000],
+            cleaned[:4000],
             parse_mode="HTML"
         )
 
     await status_msg.edit_text("✅ 모든 채널 분석 완료")
+
 
 # -------------------------------------------------
 # 오전 7시 자동 실행
@@ -128,7 +149,7 @@ async def daily_loop(application):
 
         await application.bot.send_message(
             chat_id=CHAT_ID,
-            text="🗞️ *Morning Snapshot*\n최근 24시간 채널 요약입니다.",
+            text="🗞️ <b>Morning Snapshot</b>\n최근 24시간 채널 요약입니다.",
             parse_mode="HTML"
         )
 
