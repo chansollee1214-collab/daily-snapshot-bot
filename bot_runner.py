@@ -31,8 +31,18 @@ def sanitize_html(text: str) -> str:
     if not text:
         return text
 
-    # 허용되지 않는 태그 제거
-    text = re.sub(r"</?(div|span|p)[^>]*>", "", text, flags=re.IGNORECASE)
+    # 허용되지 않는 태그 전부 제거
+    # 허용 태그: b, i, u, a, code, pre
+    allowed_tags = ["b", "i", "u", "a", "code", "pre"]
+
+    # 모든 태그 제거 후 허용 태그만 복원
+    def remove_unwanted_tags(match):
+        tag = match.group(1).lower()
+        if tag in allowed_tags:
+            return match.group(0)
+        return ""
+
+    text = re.sub(r"</?([a-zA-Z0-9]+)[^>]*>", remove_unwanted_tags, text)
 
     # 연속 줄바꿈 정리
     text = re.sub(r"\n{3,}", "\n\n", text)
