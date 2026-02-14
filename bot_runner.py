@@ -64,18 +64,47 @@ async def generate_reports(compact=False):
 # 수동 명령
 # -------------------------------------------------
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 채널별 리포트 생성 중...")
+    status_msg = await update.message.reply_text("🔄 리포트 준비 중...")
 
-    reports = await generate_reports(compact=False)
+    reports = []
+    user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    await user_client.start()
 
-    for report_text in reports:
+    data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
+    await user_client.disconnect()
+
+    grouped = defaultdict(list)
+    for item in data:
+        grouped[item["source"]].append(item["text"])
+
+    total_channels = len(grouped)
+    await status_msg.edit_text(
+        f"📊 총 {total_channels}개 채널 분석 시작...\n예상 소요: 약 {total_channels * 8}~{total_channels * 12}초"
+    )
+
+    for idx, (source, messages) in enumerate(grouped.items(), start=1):
+        await status_msg.edit_text(
+            f"📡 {idx}/{total_channels} 분석 중...\n{source}"
+        )
+
+        summary = summarize_source(source, messages)
+
+        label = CHANNEL_LABELS.get(source, f"📡 {source}")
+
+        formatted = f"""
+━━━━━━━━━━━━━━━━━━
+*{label}*
+━━━━━━━━━━━━━━━━━━
+
+{summary}
+"""
+
         await update.message.reply_text(
-            report_text[:4000],
+            formatted[:4000],
             parse_mode="Markdown"
         )
 
-    await update.message.reply_text("✅ 완료")
-
+    await status_msg.edit_text("✅ 모든 채널 분석 완료")
 
 # -------------------------------------------------
 # 오전 7시 자동 실행
