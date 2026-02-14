@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from config import KST
 
+
 async def collect_telegram(client, channels):
     cutoff_time = datetime.now(KST) - timedelta(hours=24)
 
@@ -15,7 +16,6 @@ async def collect_telegram(client, channels):
 
             if message.text:
                 results.append({
-                    "type": "telegram",
                     "source": channel,
                     "date": msg_time,
                     "text": message.text,

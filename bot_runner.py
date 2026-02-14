@@ -11,7 +11,7 @@ from telethon import TelegramClient
 
 from telegram_collector import collect_telegram
 from source_summarizer import summarize_source
-from config import TELEGRAM_CHANNELS, KST
+from config import TELEGRAM_CHANNELS, CHANNEL_LABELS, KST
 
 
 load_dotenv()
@@ -24,7 +24,7 @@ CHAT_ID = os.getenv("BOT_CHAT_ID")
 
 
 # -------------------------------------------------
-# 리포트 생성 로직
+# 리포트 생성
 # -------------------------------------------------
 async def generate_reports(compact=False):
     user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
@@ -43,15 +43,25 @@ async def generate_reports(compact=False):
         summary = summarize_source(source, messages)
 
         if compact:
-            summary = summary[:1200]
+            summary = summary[:1000]
 
-        results.append(summary)
+        label = CHANNEL_LABELS.get(source, f"📡 {source}")
+
+        formatted = f"""
+━━━━━━━━━━━━━━━━━━
+*{label}*
+━━━━━━━━━━━━━━━━━━
+
+{summary}
+"""
+
+        results.append(formatted.strip())
 
     return results
 
 
 # -------------------------------------------------
-# 수동 명령 (/report)
+# 수동 명령
 # -------------------------------------------------
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📊 채널별 리포트 생성 중...")
@@ -68,7 +78,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------
-# 오전 7시 자동 실행 루프
+# 오전 7시 자동 실행
 # -------------------------------------------------
 async def daily_loop(application):
     while True:
@@ -110,7 +120,6 @@ async def daily_loop(application):
 # 실행
 # -------------------------------------------------
 async def post_init(application):
-    # 루프가 이미 시작된 후에 자동 작업 실행
     asyncio.create_task(daily_loop(application))
 
 
