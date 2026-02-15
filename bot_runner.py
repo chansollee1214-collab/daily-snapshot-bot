@@ -38,11 +38,11 @@ async def generate_reports(compact=False):
 
     telegram_grouped = defaultdict(list)
     for item in telegram_data:
-        telegram_grouped[item["source"]].append(item["text"])
+        telegram_grouped[item["source"]].append(item)
 
     naver_grouped = defaultdict(list)
     for item in naver_data:
-        naver_grouped[item["source"]].append(item["text"])
+        naver_grouped[item["source"]].append(item)
 
     results = []
 
