@@ -7,7 +7,18 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def summarize_source(source_name, messages):
-    combined = "\n\n".join(messages[:100])  # 채널당 최대 100개 제한
+    combined_list = []
+
+    for m in messages[:100]:
+        text = m["text"]
+        link = m.get("link")
+
+        if link:
+            combined_list.append(f"{text}\n(출처: {link})")
+        else:
+            combined_list.append(text)
+
+    combined = "\n\n".join(combined_list)
 
     prompt = f"""
     아래는 텔레그램 채널 '{source_name}'의 최근 24시간 메시지다.
@@ -26,7 +37,7 @@ def summarize_source(source_name, messages):
     - 뉴스 나열 금지
     - 채널 내 논의 흐름 중심으로 재구성
     - 어려운 경제, 기술용어는 쉽게 풀어 설명
-    - 채널 링크도 하단에 첨부
+    - 참고한 링크도 하단에 첨부
 
     아래는 텔레그램 채널의 최근 24시간 메시지다.
 

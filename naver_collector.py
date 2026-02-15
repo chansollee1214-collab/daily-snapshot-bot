@@ -22,7 +22,8 @@ async def collect_naver(blog_dict):
 
             results.append({
                 "source": blog_id,
-                "text": f"{entry.title}\n{entry.summary}"
+                "text": f"{entry.title}\n{entry.summary}",
+                "link": entry.link
             })
 
     return results

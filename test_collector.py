@@ -1,25 +1,29 @@
-import os
-from dotenv import load_dotenv
-from telegram_collector import collect_telegram
-from config import TELEGRAM_CHANNELS
+from datetime import datetime, timedelta
+from config import KST
 
-load_dotenv()
 
-api_id = int(os.getenv("TG_API_ID"))
-api_hash = os.getenv("TG_API_HASH")
-session_name = os.getenv("TG_SESSION")
+async def collect_telegram(client, channels):
+    cutoff = datetime.now(KST) - timedelta(hours=24)
+    results = []
 
-data = collect_telegram(
-    TELEGRAM_CHANNELS,
-    api_id,
-    api_hash,
-    session_name
-)
+    for channel in channels:
+        async for message in client.iter_messages(channel):
+            msg_time = message.date.astimezone(KST)
 
-print(f"총 수집 개수: {len(data)}\n")
+            if msg_time < cutoff:
+                break
 
-for item in data[:5]:
-    print("-----")
-    print(item["source"])
-    print(item["date"])
-    print(item["text"][:100])
+            if not message.text:
+                continue
+
+            link = None
+            if message.chat and message.chat.username:
+                link = f"https://t.me/{message.chat.username}/{message.id}"
+
+            results.append({
+                "source": channel,
+                "text": message.text,
+                "link": link
+            })
+
+    return results
