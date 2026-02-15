@@ -19,6 +19,7 @@ async def collect_telegram(client, channels):
                     "source": channel,
                     "date": msg_time,
                     "text": message.text,
+                    "link": f"https://t.me/{message.chat.username}/{message.id}"
                 })
 
     return results
