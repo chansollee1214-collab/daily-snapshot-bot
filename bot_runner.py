@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 from datetime import datetime, timedelta, time as dtime
 from collections import defaultdict
@@ -26,27 +25,6 @@ CHAT_ID = os.getenv("BOT_CHAT_ID")
 
 
 # -------------------------------------------------
-# HTML 안전 처리
-# -------------------------------------------------
-def sanitize_html(text: str) -> str:
-    if not text:
-        return text
-
-    allowed_tags = ["b", "i", "u", "a", "code", "pre"]
-
-    def remove_unwanted_tags(match):
-        tag = match.group(1).lower()
-        if tag in allowed_tags:
-            return match.group(0)
-        return ""
-
-    text = re.sub(r"</?([a-zA-Z0-9]+)[^>]*>", remove_unwanted_tags, text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    return text.strip()
-
-
-# -------------------------------------------------
 # 리포트 생성 공통 함수
 # -------------------------------------------------
 async def generate_reports(compact=False):
@@ -70,7 +48,7 @@ async def generate_reports(compact=False):
 
     # Telegram 섹션
     if telegram_grouped:
-        results.append("━━━━━━━━━━━━━━━━━━\n<b>📡 Telegram Channel Brief</b>\n━━━━━━━━━━━━━━━━━━")
+        results.append("━━━━━━━━━━━━━━━━━━\n📡 Telegram Channel Brief\n━━━━━━━━━━━━━━━━━━")
 
         for source, messages in telegram_grouped.items():
             summary = summarize_source(source, messages)
@@ -80,15 +58,15 @@ async def generate_reports(compact=False):
             label = CHANNEL_LABELS.get(source, f"📡 {source}")
 
             formatted = f"""
-<b>{label}</b>
+{label}
 
 {summary}
 """
-            results.append(sanitize_html(formatted))
+            results.append(formatted.strip())
 
     # Naver 섹션
     if naver_grouped:
-        results.append("\n━━━━━━━━━━━━━━━━━━\n<b>📝 Naver Blog Brief</b>\n━━━━━━━━━━━━━━━━━━")
+        results.append("\n━━━━━━━━━━━━━━━━━━\n📝 Naver Blog Brief\n━━━━━━━━━━━━━━━━━━")
 
         for blog_id, messages in naver_grouped.items():
             summary = summarize_source(blog_id, messages)
@@ -98,11 +76,11 @@ async def generate_reports(compact=False):
             label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
 
             formatted = f"""
-<b>{label}</b>
+{label}
 
 {summary}
 """
-            results.append(sanitize_html(formatted))
+            results.append(formatted.strip())
 
     return results
 
@@ -130,11 +108,11 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item in naver_data:
         naver_grouped[item["source"]].append(item["text"])
 
-    total_channels = len(telegram_grouped) + len(naver_grouped)
+    total_sources = len(telegram_grouped) + len(naver_grouped)
 
     await update.message.reply_text(
-        f"📊 총 {total_channels}개 소스 분석 시작\n"
-        f"예상 소요: 약 {total_channels * 8}~{total_channels * 12}초"
+        f"📊 총 {total_sources}개 소스 분석 시작\n"
+        f"예상 소요: 약 {total_sources * 8}~{total_sources * 12}초"
     )
 
     current = 0
@@ -144,7 +122,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current += 1
 
         await update.message.reply_text(
-            f"📡 {current}/{total_channels} 분석 중...\n{source}"
+            f"📡 {current}/{total_sources} 분석 중...\n{source}"
         )
 
         summary = summarize_source(source, messages)
@@ -152,22 +130,19 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         formatted = f"""
 ━━━━━━━━━━━━━━━━━━
-<b>{label}</b>
+{label}
 ━━━━━━━━━━━━━━━━━━
 
 {summary}
 """
-        await update.message.reply_text(
-            sanitize_html(formatted)[:4000],
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(formatted[:4000])
 
     # Naver 처리
     for blog_id, messages in naver_grouped.items():
         current += 1
 
         await update.message.reply_text(
-            f"📝 {current}/{total_channels} 분석 중...\n{blog_id}"
+            f"📝 {current}/{total_sources} 분석 중...\n{blog_id}"
         )
 
         summary = summarize_source(blog_id, messages)
@@ -175,15 +150,12 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         formatted = f"""
 ━━━━━━━━━━━━━━━━━━
-<b>{label}</b>
+{label}
 ━━━━━━━━━━━━━━━━━━
 
 {summary}
 """
-        await update.message.reply_text(
-            sanitize_html(formatted)[:4000],
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(formatted[:4000])
 
     await update.message.reply_text("✅ 모든 소스 분석 완료")
 
@@ -210,15 +182,13 @@ async def daily_loop(application):
 
         await application.bot.send_message(
             chat_id=CHAT_ID,
-            text="🗞️ <b>Morning Snapshot</b>\n최근 24시간 채널 + 블로그 요약입니다.",
-            parse_mode="HTML"
+            text="🗞️ Morning Snapshot\n최근 24시간 채널 + 블로그 요약입니다."
         )
 
         for report_text in reports:
             await application.bot.send_message(
                 chat_id=CHAT_ID,
-                text=report_text[:4000],
-                parse_mode="HTML"
+                text=report_text[:4000]
             )
 
         await application.bot.send_message(
