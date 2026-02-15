@@ -12,7 +12,8 @@ from telethon import TelegramClient
 
 from telegram_collector import collect_telegram
 from source_summarizer import summarize_source
-from config import TELEGRAM_CHANNELS, CHANNEL_LABELS, KST
+from config import TELEGRAM_CHANNELS, CHANNEL_LABELS, NAVER_BLOGS, KST
+from naver_collector import collect_naver
 
 
 load_dotenv()
@@ -25,17 +26,14 @@ CHAT_ID = os.getenv("BOT_CHAT_ID")
 
 
 # -------------------------------------------------
-# HTML 정리 함수 (Telegram 안전 처리)
+# HTML 안전 처리
 # -------------------------------------------------
 def sanitize_html(text: str) -> str:
     if not text:
         return text
 
-    # 허용되지 않는 태그 전부 제거
-    # 허용 태그: b, i, u, a, code, pre
     allowed_tags = ["b", "i", "u", "a", "code", "pre"]
 
-    # 모든 태그 제거 후 허용 태그만 복원
     def remove_unwanted_tags(match):
         tag = match.group(1).lower()
         if tag in allowed_tags:
@@ -43,77 +41,110 @@ def sanitize_html(text: str) -> str:
         return ""
 
     text = re.sub(r"</?([a-zA-Z0-9]+)[^>]*>", remove_unwanted_tags, text)
-
-    # 연속 줄바꿈 정리
     text = re.sub(r"\n{3,}", "\n\n", text)
 
     return text.strip()
 
 
 # -------------------------------------------------
-# 리포트 생성
+# 리포트 생성 공통 함수
 # -------------------------------------------------
 async def generate_reports(compact=False):
     user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await user_client.start()
 
-    data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
+    telegram_data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
+    naver_data = await collect_naver(NAVER_BLOGS)
+
     await user_client.disconnect()
 
-    grouped = defaultdict(list)
-    for item in data:
-        grouped[item["source"]].append(item["text"])
+    telegram_grouped = defaultdict(list)
+    for item in telegram_data:
+        telegram_grouped[item["source"]].append(item["text"])
+
+    naver_grouped = defaultdict(list)
+    for item in naver_data:
+        naver_grouped[item["source"]].append(item["text"])
 
     results = []
 
-    for source, messages in grouped.items():
-        summary = summarize_source(source, messages)
+    # Telegram 섹션
+    if telegram_grouped:
+        results.append("━━━━━━━━━━━━━━━━━━\n<b>📡 Telegram Channel Brief</b>\n━━━━━━━━━━━━━━━━━━")
 
-        if compact:
-            summary = summary[:1000]
+        for source, messages in telegram_grouped.items():
+            summary = summarize_source(source, messages)
+            if compact:
+                summary = summary[:1000]
 
-        label = CHANNEL_LABELS.get(source, f"📡 {source}")
+            label = CHANNEL_LABELS.get(source, f"📡 {source}")
 
-        formatted = f"""
-━━━━━━━━━━━━━━━━━━
+            formatted = f"""
 <b>{label}</b>
-━━━━━━━━━━━━━━━━━━
 
 {summary}
 """
+            results.append(sanitize_html(formatted))
 
-        cleaned = sanitize_html(formatted)
-        results.append(cleaned)
+    # Naver 섹션
+    if naver_grouped:
+        results.append("\n━━━━━━━━━━━━━━━━━━\n<b>📝 Naver Blog Brief</b>\n━━━━━━━━━━━━━━━━━━")
+
+        for blog_id, messages in naver_grouped.items():
+            summary = summarize_source(blog_id, messages)
+            if compact:
+                summary = summary[:1000]
+
+            label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
+
+            formatted = f"""
+<b>{label}</b>
+
+{summary}
+"""
+            results.append(sanitize_html(formatted))
 
     return results
 
 
 # -------------------------------------------------
-# 수동 명령
+# 수동 명령 (/report)
 # -------------------------------------------------
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_msg = await update.message.reply_text("🔄 리포트 준비 중...")
+
+    await update.message.reply_text("🔄 리포트 준비 중...")
 
     user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await user_client.start()
 
-    data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
+    telegram_data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
+    naver_data = await collect_naver(NAVER_BLOGS)
+
     await user_client.disconnect()
 
-    grouped = defaultdict(list)
-    for item in data:
-        grouped[item["source"]].append(item["text"])
+    telegram_grouped = defaultdict(list)
+    for item in telegram_data:
+        telegram_grouped[item["source"]].append(item["text"])
 
-    total_channels = len(grouped)
+    naver_grouped = defaultdict(list)
+    for item in naver_data:
+        naver_grouped[item["source"]].append(item["text"])
 
-    await status_msg.edit_text(
-        f"📊 총 {total_channels}개 채널 분석 시작\n"
+    total_channels = len(telegram_grouped) + len(naver_grouped)
+
+    await update.message.reply_text(
+        f"📊 총 {total_channels}개 소스 분석 시작\n"
         f"예상 소요: 약 {total_channels * 8}~{total_channels * 12}초"
     )
 
-    for idx, (source, messages) in enumerate(grouped.items(), start=1):
-        await status_msg.edit_text(
-            f"📡 {idx}/{total_channels} 분석 중...\n{source}"
+    current = 0
+
+    # Telegram 처리
+    for source, messages in telegram_grouped.items():
+        current += 1
+
+        await update.message.reply_text(
+            f"📡 {current}/{total_channels} 분석 중...\n{source}"
         )
 
         summary = summarize_source(source, messages)
@@ -126,15 +157,35 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 {summary}
 """
-
-        cleaned = sanitize_html(formatted)
-
         await update.message.reply_text(
-            cleaned[:4000],
+            sanitize_html(formatted)[:4000],
             parse_mode="HTML"
         )
 
-    await status_msg.edit_text("✅ 모든 채널 분석 완료")
+    # Naver 처리
+    for blog_id, messages in naver_grouped.items():
+        current += 1
+
+        await update.message.reply_text(
+            f"📝 {current}/{total_channels} 분석 중...\n{blog_id}"
+        )
+
+        summary = summarize_source(blog_id, messages)
+        label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
+
+        formatted = f"""
+━━━━━━━━━━━━━━━━━━
+<b>{label}</b>
+━━━━━━━━━━━━━━━━━━
+
+{summary}
+"""
+        await update.message.reply_text(
+            sanitize_html(formatted)[:4000],
+            parse_mode="HTML"
+        )
+
+    await update.message.reply_text("✅ 모든 소스 분석 완료")
 
 
 # -------------------------------------------------
@@ -159,7 +210,7 @@ async def daily_loop(application):
 
         await application.bot.send_message(
             chat_id=CHAT_ID,
-            text="🗞️ <b>Morning Snapshot</b>\n최근 24시간 채널 요약입니다.",
+            text="🗞️ <b>Morning Snapshot</b>\n최근 24시간 채널 + 블로그 요약입니다.",
             parse_mode="HTML"
         )
 
