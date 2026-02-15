@@ -14,7 +14,6 @@ from source_summarizer import summarize_source
 from config import TELEGRAM_CHANNELS, CHANNEL_LABELS, NAVER_BLOGS, KST
 from naver_collector import collect_naver
 
-
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -22,6 +21,14 @@ API_ID = int(os.getenv("TG_API_ID"))
 API_HASH = os.getenv("TG_API_HASH")
 SESSION_NAME = os.getenv("TG_SESSION")
 CHAT_ID = os.getenv("BOT_CHAT_ID")
+
+
+# -------------------------------------------------
+# 텍스트 안전 분할 함수 (4096자 제한 대응)
+# -------------------------------------------------
+async def safe_send(bot, chat_id, text):
+    for i in range(0, len(text), 4000):
+        await bot.send_message(chat_id=chat_id, text=text[i:i+4000])
 
 
 # -------------------------------------------------
@@ -46,12 +53,13 @@ async def generate_reports(compact=False):
 
     results = []
 
-    # Telegram 섹션
+    # Telegram
     if telegram_grouped:
         results.append("━━━━━━━━━━━━━━━━━━\n📡 Telegram Channel Brief\n━━━━━━━━━━━━━━━━━━")
 
         for source, messages in telegram_grouped.items():
             summary = summarize_source(source, messages)
+
             if compact:
                 summary = summary[:1000]
 
@@ -64,12 +72,13 @@ async def generate_reports(compact=False):
 """
             results.append(formatted.strip())
 
-    # Naver 섹션
+    # Naver
     if naver_grouped:
         results.append("\n━━━━━━━━━━━━━━━━━━\n📝 Naver Blog Brief\n━━━━━━━━━━━━━━━━━━")
 
         for blog_id, messages in naver_grouped.items():
             summary = summarize_source(blog_id, messages)
+
             if compact:
                 summary = summary[:1000]
 
@@ -102,11 +111,11 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     telegram_grouped = defaultdict(list)
     for item in telegram_data:
-        telegram_grouped[item["source"]].append(item["text"])
+        telegram_grouped[item["source"]].append(item)
 
     naver_grouped = defaultdict(list)
     for item in naver_data:
-        naver_grouped[item["source"]].append(item["text"])
+        naver_grouped[item["source"]].append(item)
 
     total_sources = len(telegram_grouped) + len(naver_grouped)
 
@@ -117,7 +126,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current = 0
 
-    # Telegram 처리
+    # Telegram
     for source, messages in telegram_grouped.items():
         current += 1
 
@@ -135,9 +144,10 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 {summary}
 """
+
         await update.message.reply_text(formatted[:4000])
 
-    # Naver 처리
+    # Naver
     for blog_id, messages in naver_grouped.items():
         current += 1
 
@@ -155,6 +165,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 {summary}
 """
+
         await update.message.reply_text(formatted[:4000])
 
     await update.message.reply_text("✅ 모든 소스 분석 완료")
@@ -169,7 +180,7 @@ async def daily_loop(application):
         target = datetime.combine(now.date(), dtime(7, 0, tzinfo=KST))
 
         if now >= target:
-            target = target + timedelta(days=1)
+            target += timedelta(days=1)
 
         wait_seconds = (target - now).total_seconds()
         print(f"⏳ 다음 자동 실행까지 {int(wait_seconds)}초 대기")
@@ -186,10 +197,7 @@ async def daily_loop(application):
         )
 
         for report_text in reports:
-            await application.bot.send_message(
-                chat_id=CHAT_ID,
-                text=report_text[:4000]
-            )
+            await safe_send(application.bot, CHAT_ID, report_text)
 
         await application.bot.send_message(
             chat_id=CHAT_ID,
