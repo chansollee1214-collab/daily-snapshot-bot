@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from collections import defaultdict
 from dotenv import load_dotenv
 
@@ -30,7 +30,6 @@ if _CHAT_ID_RAW and _CHAT_ID_RAW.lstrip("-").isdigit():
 else:
     CHAT_ID = _CHAT_ID_RAW
 
-# 로그 (배포 환경 로그에서 daily_loop 예외 확인 가능)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -86,7 +85,6 @@ async def generate_reports(compact=False):
                 summary = summary[:1000]
 
             label = CHANNEL_LABELS.get(source, f"📡 {source}")
-
             formatted = f"""
 {label}
 
@@ -104,7 +102,6 @@ async def generate_reports(compact=False):
                 summary = summary[:1000]
 
             label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
-
             formatted = f"""
 {label}
 
@@ -116,7 +113,7 @@ async def generate_reports(compact=False):
 
 
 # -------------------------------------------------
-# (추가) 자동 리포트 1회 전송 공통 로직
+# 자동 리포트 1회 전송 공통 로직
 # -------------------------------------------------
 async def send_morning_snapshot(bot, chat_id, compact=True, is_test=False):
     reports = await generate_reports(compact=compact)
@@ -138,6 +135,17 @@ async def send_morning_snapshot(bot, chat_id, compact=True, is_test=False):
         end_msg += " (TEST)"
 
     await bot.send_message(chat_id=chat_id, text=end_msg)
+
+
+# -------------------------------------------------
+# /chatid : 지금 채팅방의 chat_id 확인용 (BOT_CHAT_ID 세팅에 필요)
+# -------------------------------------------------
+async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cid = update.effective_chat.id
+    await update.message.reply_text(
+        f"🆔 이 채팅의 chat_id: {cid}\n"
+        f"→ 이 값을 배포 환경변수 BOT_CHAT_ID에 넣으면 자동 리포트가 이 채팅으로 갑니다."
+    )
 
 
 # -------------------------------------------------
@@ -174,10 +182,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Telegram
     for source, messages in telegram_grouped.items():
         current += 1
-
-        await update.message.reply_text(
-            f"📡 {current}/{total_sources} 분석 중...\n{source}"
-        )
+        await update.message.reply_text(f"📡 {current}/{total_sources} 분석 중...\n{source}")
 
         summary = summarize_source(source, messages)
         label = CHANNEL_LABELS.get(source, f"📡 {source}")
@@ -194,10 +199,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Naver
     for blog_id, messages in naver_grouped.items():
         current += 1
-
-        await update.message.reply_text(
-            f"📝 {current}/{total_sources} 분석 중...\n{blog_id}"
-        )
+        await update.message.reply_text(f"📝 {current}/{total_sources} 분석 중...\n{blog_id}")
 
         summary = summarize_source(blog_id, messages)
         label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
@@ -215,8 +217,8 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------
-# (추가) 지금 당장 자동 리포트 테스트 실행: /test_daily
-#  - 기본: 명령 친 채팅으로 전송
+# /test_daily : 지금 당장 자동리포트 경로 1회 테스트
+#  - 기본: 현재 채팅으로 전송
 #  - /test_daily prod : BOT_CHAT_ID로 전송
 # -------------------------------------------------
 async def test_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,7 +232,7 @@ async def test_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.args and context.args[0].lower() in ("prod", "real", "chatid"):
         if not CHAT_ID:
-            await update.message.reply_text("❌ BOT_CHAT_ID가 비어있어서 prod 테스트를 할 수 없습니다.")
+            await update.message.reply_text("❌ BOT_CHAT_ID가 비어있어서 prod 테스트를 할 수 없습니다. 먼저 /chatid로 값 확인 후 BOT_CHAT_ID를 세팅하세요.")
             return
         dest_chat_id = CHAT_ID
         mode = "BOT_CHAT_ID"
@@ -258,44 +260,34 @@ async def test_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------------------------------------------------
-# 오전 7시 자동 실행 (안 죽게 안정화)
+# 오전 7시 자동 실행 (JobQueue)
 # -------------------------------------------------
-async def daily_loop(application):
-    while True:
-        try:
-            if not CHAT_ID:
-                logger.error("BOT_CHAT_ID가 비어있습니다. 자동 리포트를 보낼 수 없습니다.")
-                await asyncio.sleep(60)
-                continue
+async def daily_job(context: ContextTypes.DEFAULT_TYPE):
+    if not CHAT_ID:
+        logger.error("BOT_CHAT_ID가 비어있습니다. 자동 리포트를 보낼 수 없습니다.")
+        return
 
-            now = datetime.now(KST)
-            target = now.replace(hour=7, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target += timedelta(days=1)
-
-            wait_seconds = max(0, (target - now).total_seconds())
-            logger.info("⏳ 다음 자동 실행까지 %s초 대기 (KST 목표: %s)", int(wait_seconds), target.isoformat())
-            await asyncio.sleep(wait_seconds)
-
-            logger.info("⏰ 오전 7시 자동 리포트 실행")
-            await send_morning_snapshot(
-                bot=application.bot,
-                chat_id=CHAT_ID,
-                compact=True,
-                is_test=False
-            )
-
-        except Exception:
-            logger.exception("daily_loop에서 예외 발생. 60초 후 재시도")
-            await asyncio.sleep(60)
+    logger.info("⏰ 오전 7시 자동 리포트 실행 (JobQueue)")
+    await send_morning_snapshot(
+        bot=context.bot,
+        chat_id=CHAT_ID,
+        compact=True,
+        is_test=False
+    )
 
 
-# -------------------------------------------------
-# 실행
-# -------------------------------------------------
 async def post_init(application):
-    # PTB가 관리하는 task로 등록 (예외/취소 처리 안정)
-    application.create_task(daily_loop(application))
+    # 매일 KST 07:00 실행
+    if application.job_queue is None:
+        logger.error("JobQueue가 활성화되어 있지 않습니다. requirements.txt에서 python-telegram-bot[job-queue] 설치가 필요합니다.")
+        return
+
+    application.job_queue.run_daily(
+        daily_job,
+        time=dtime(hour=7, minute=0, tzinfo=KST),
+        name="daily_morning_snapshot",
+    )
+    logger.info("✅ JobQueue 등록 완료: 매일 KST 07:00 자동 리포트")
 
 
 def main():
@@ -308,6 +300,7 @@ def main():
 
     app.add_handler(CommandHandler("report", report))
     app.add_handler(CommandHandler("test_daily", test_daily))
+    app.add_handler(CommandHandler("chatid", chatid))
 
     print("🤖 봇 실행 중...")
     app.run_polling()
