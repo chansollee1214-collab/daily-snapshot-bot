@@ -36,13 +36,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# (권장) httpx가 매 요청 URL을 찍어서 토큰이 노출될 수 있어 WARNING으로 낮춤
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 # -------------------------------------------------
-# 텍스트 안전 분할 + 레이트리밋 대응 (4096자 제한)
+# 텍스트 안전 분할 + 레이트리밋 대응 (URL 중간 절단 방지)
 # -------------------------------------------------
-async def safe_send(bot, chat_id, text):
-    for i in range(0, len(text), 4000):
-        chunk = text[i:i + 4000]
+async def safe_send(bot, chat_id, text, limit=4000):
+    """
+    텔레그램 메시지 길이 제한 대응.
+    - 가능한 한 줄바꿈(\n) 기준으로 쪼개서 URL이 중간에서 잘리는 문제를 줄임.
+    - 줄바꿈이 없으면 공백 기준으로 자름.
+    - 그마저도 없으면(limit보다 긴 단일 토큰) 어쩔 수 없이 limit에서 자름.
+    """
+    remaining = (text or "").strip()
+    while remaining:
+        if len(remaining) <= limit:
+            await bot.send_message(chat_id=chat_id, text=remaining)
+            return
+
+        # limit 이내에서 가장 마지막 줄바꿈 우선
+        cut = remaining.rfind("\n", 0, limit)
+
+        # 줄바꿈이 없다면 공백 기준으로
+        if cut < 0:
+            cut = remaining.rfind(" ", 0, limit)
+
+        # 너무 앞에서 끊기면 비효율적이라 fallback
+        if cut < 0 or cut < int(limit * 0.6):
+            cut = limit
+
+        chunk = remaining[:cut].rstrip()
+        remaining = remaining[cut:].lstrip()
+
+        # 레이트리밋 대응
         while True:
             try:
                 await bot.send_message(chat_id=chat_id, text=chunk)
@@ -54,16 +82,17 @@ async def safe_send(bot, chat_id, text):
 
 
 # -------------------------------------------------
-# 리포트 생성 공통 함수
+# (스트리밍) 채널/블로그 1개 끝날 때마다 바로 yield
 # -------------------------------------------------
-async def generate_reports(compact=False):
+async def generate_reports_stream(compact=False):
     user_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await user_client.start()
 
-    telegram_data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
-    naver_data = await collect_naver(NAVER_BLOGS)
-
-    await user_client.disconnect()
+    try:
+        telegram_data = await collect_telegram(user_client, TELEGRAM_CHANNELS)
+        naver_data = await collect_naver(NAVER_BLOGS)
+    finally:
+        await user_client.disconnect()
 
     telegram_grouped = defaultdict(list)
     for item in telegram_data:
@@ -73,83 +102,77 @@ async def generate_reports(compact=False):
     for item in naver_data:
         naver_grouped[item["source"]].append(item)
 
-    results = []
-
     # Telegram
     if telegram_grouped:
-        results.append("━━━━━━━━━━━━━━━━━━\n📡 Telegram Channel Brief\n━━━━━━━━━━━━━━━━━━")
+        yield "━━━━━━━━━━━━━━━━━━\n📡 Telegram Channel Brief\n━━━━━━━━━━━━━━━━━━"
 
         for source, messages in telegram_grouped.items():
+            logger.info("요약 생성 중 (Telegram): %s", source)
+
             summary = summarize_source(source, messages)
             if compact:
                 summary = summary[:1000]
 
             label = CHANNEL_LABELS.get(source, f"📡 {source}")
-            formatted = f"""
-{label}
-
-{summary}
-"""
-            results.append(formatted.strip())
+            yield f"{label}\n\n{summary}".strip()
 
     # Naver
     if naver_grouped:
-        results.append("\n━━━━━━━━━━━━━━━━━━\n📝 Naver Blog Brief\n━━━━━━━━━━━━━━━━━━")
+        yield "━━━━━━━━━━━━━━━━━━\n📝 Naver Blog Brief\n━━━━━━━━━━━━━━━━━━"
 
         for blog_id, messages in naver_grouped.items():
+            logger.info("요약 생성 중 (Naver): %s", blog_id)
+
             summary = summarize_source(blog_id, messages)
             if compact:
                 summary = summary[:1000]
 
             label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
-            formatted = f"""
-{label}
-
-{summary}
-"""
-            results.append(formatted.strip())
-
-    return results
+            yield f"{label}\n\n{summary}".strip()
 
 
 # -------------------------------------------------
-# 자동 리포트 1회 전송 공통 로직
+# 자동 리포트: 스트리밍 전송 (한 소스 끝날 때마다 바로 보내기)
 # -------------------------------------------------
 async def send_morning_snapshot(bot, chat_id, compact=True, is_test=False):
-    reports = await generate_reports(compact=compact)
-
     title = "🗞️ Morning Snapshot"
     if is_test:
         title += " (TEST)"
 
     await bot.send_message(
         chat_id=chat_id,
-        text=f"{title}\n최근 24시간 채널 + 블로그 요약입니다."
+        text=f"{title}\n⏳ 소스별로 요약이 완성되는 즉시 순차 전송합니다."
     )
 
-    for report_text in reports:
+    sent_blocks = 0
+    async for report_text in generate_reports_stream(compact=compact):
         await safe_send(bot, chat_id, report_text)
+        sent_blocks += 1
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"✅ 전송 완료! (총 {sent_blocks}개 블록)"
+    )
 
     end_msg = "☀️ 좋은 하루 보내세요."
     if is_test:
         end_msg += " (TEST)"
-
     await bot.send_message(chat_id=chat_id, text=end_msg)
 
 
 # -------------------------------------------------
-# /chatid : 지금 채팅방의 chat_id 확인용 (BOT_CHAT_ID 세팅에 필요)
+# /chatid : 지금 채팅방의 chat_id 확인용
 # -------------------------------------------------
 async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cid = update.effective_chat.id
     await update.message.reply_text(
         f"🆔 이 채팅의 chat_id: {cid}\n"
-        f"→ 이 값을 배포 환경변수 BOT_CHAT_ID에 넣으면 자동 리포트가 이 채팅으로 갑니다."
+        f"→ 이 값을 Railway Variables의 BOT_CHAT_ID에 넣으면 자동 리포트가 이 채팅으로 갑니다."
     )
 
 
 # -------------------------------------------------
-# 수동 명령 (/report)
+# 수동 명령 (/report) - 기존 동작 유지
 # -------------------------------------------------
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 리포트 준비 중...")
@@ -194,7 +217,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 {summary}
 """
-        await update.message.reply_text(formatted[:4000])
+        await safe_send(context.bot, update.effective_chat.id, formatted)
 
     # Naver
     for blog_id, messages in naver_grouped.items():
@@ -211,15 +234,13 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 {summary}
 """
-        await update.message.reply_text(formatted[:4000])
+        await safe_send(context.bot, update.effective_chat.id, formatted)
 
     await update.message.reply_text("✅ 모든 소스 분석 완료")
 
 
 # -------------------------------------------------
-# /test_daily : 지금 당장 자동리포트 경로 1회 테스트
-#  - 기본: 현재 채팅으로 전송
-#  - /test_daily prod : BOT_CHAT_ID로 전송
+# /test_daily : 지금 당장 자동리포트 1회 테스트
 # -------------------------------------------------
 async def test_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(KST)
@@ -232,7 +253,10 @@ async def test_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.args and context.args[0].lower() in ("prod", "real", "chatid"):
         if not CHAT_ID:
-            await update.message.reply_text("❌ BOT_CHAT_ID가 비어있어서 prod 테스트를 할 수 없습니다. 먼저 /chatid로 값 확인 후 BOT_CHAT_ID를 세팅하세요.")
+            await update.message.reply_text(
+                "❌ BOT_CHAT_ID가 비어있어서 prod 테스트를 할 수 없습니다.\n"
+                "먼저 /chatid로 값 확인 후 BOT_CHAT_ID를 세팅하세요."
+            )
             return
         dest_chat_id = CHAT_ID
         mode = "BOT_CHAT_ID"
@@ -243,7 +267,7 @@ async def test_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- 다음 자동 실행: {next_run.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"- 전송 모드: {mode}\n"
         f"- 전송 대상 chat_id: {dest_chat_id}\n"
-        "⏳ 수집/요약 중..."
+        "⏳ 수집/요약 중... (완성되는 소스부터 순차 전송됩니다)"
     )
 
     try:
@@ -277,9 +301,11 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init(application):
-    # 매일 KST 07:00 실행
     if application.job_queue is None:
-        logger.error("JobQueue가 활성화되어 있지 않습니다. requirements.txt에서 python-telegram-bot[job-queue] 설치가 필요합니다.")
+        logger.error(
+            "JobQueue가 활성화되어 있지 않습니다. requirements.txt에서 "
+            "python-telegram-bot[job-queue]==20.7 설치가 필요합니다."
+        )
         return
 
     application.job_queue.run_daily(
