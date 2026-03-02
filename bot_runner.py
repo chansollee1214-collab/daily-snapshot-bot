@@ -110,8 +110,6 @@ async def generate_reports_stream(compact=False):
             logger.info("요약 생성 중 (Telegram): %s", source)
 
             summary = summarize_source(source, messages)
-            if compact:
-                summary = summary[:1000]
 
             label = CHANNEL_LABELS.get(source, f"📡 {source}")
             yield f"{label}\n\n{summary}".strip()
@@ -124,8 +122,6 @@ async def generate_reports_stream(compact=False):
             logger.info("요약 생성 중 (Naver): %s", blog_id)
 
             summary = summarize_source(blog_id, messages)
-            if compact:
-                summary = summary[:1000]
 
             label = NAVER_BLOGS.get(blog_id, f"📝 {blog_id}")
             yield f"{label}\n\n{summary}".strip()
