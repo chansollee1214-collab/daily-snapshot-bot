@@ -1,13 +1,69 @@
 from openai import OpenAI
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# 완전형 텔레그램 링크만 허용
+# - 공개채널: https://t.me/username/12345
+# - 내부링크: https://t.me/c/123456789/12345
+FULL_TME_LINK_RE = re.compile(r"^https://t\.me/(?:c/\d+|[A-Za-z0-9_]+)/\d+$")
+
+
+def _unique_keep_order(items):
+    seen = set()
+    out = []
+    for x in items:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _strip_output_links_section(text: str) -> str:
+    """
+    모델이 출력한 '원문 출처 링크' 섹션(및 URL 라인)을 제거해서
+    우리가 가진 링크 목록으로 다시 붙일 수 있게 함.
+    """
+    lines = (text or "").splitlines()
+    cleaned = []
+    in_links_section = False
+
+    for line in lines:
+        s = line.strip()
+
+        # '원문 출처 링크' 섹션 시작 감지
+        if s.replace(" ", "") == "원문출처링크":
+            in_links_section = True
+            continue
+
+        # 링크 섹션 안에서는 URL/빈줄만 스킵하고, 다른 텍스트가 나오면 섹션 종료
+        if in_links_section:
+            if not s:
+                continue
+            if s.startswith("http://") or s.startswith("https://"):
+                continue
+            # 링크 섹션인데 URL이 아닌 텍스트가 나오면 섹션 종료하고 그 라인은 본문으로 살림
+            in_links_section = False
+
+        # 섹션 밖에서도 URL 라인이 섞이면 제거(가끔 모델이 본문에 URL을 넣음)
+        if s.startswith("http://") or s.startswith("https://"):
+            continue
+
+        cleaned.append(line)
+
+    # 뒤쪽 공백 정리
+    return "\n".join(cleaned).strip()
+
+
 def summarize_source(source_name, messages):
     combined_list = []
+
+    # ✅ 우리가 붙일 "정확한 링크"는 따로 모아둠
+    links = []
 
     for m in messages[:100]:
         text = m["text"]
@@ -15,6 +71,9 @@ def summarize_source(source_name, messages):
 
         if link:
             combined_list.append(f"{text}\n(출처: {link})")
+            # 완전형 링크만 저장
+            if FULL_TME_LINK_RE.match(link.strip()):
+                links.append(link.strip())
         else:
             combined_list.append(text)
 
@@ -57,4 +116,14 @@ def summarize_source(source_name, messages):
         input=prompt,
     )
 
-    return response.output_text
+    out = (response.output_text or "").strip()
+
+    # ✅ (핵심) 모델이 만든 '원문 출처 링크' 섹션/URL 라인 제거
+    out = _strip_output_links_section(out)
+
+    # ✅ 링크는 우리가 가진 것만 "정확히" 다시 붙이기
+    links = _unique_keep_order(links)[:10]  # 너무 길어지면 상위 10개만
+    if links:
+        out += "\n\n원문 출처 링크\n" + "\n".join(links)
+
+    return out
